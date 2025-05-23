@@ -8,7 +8,6 @@ import boto3
 from botocore.config import Config
 import os
 from prompt import FINANCIAL_ADVISOR_PROMPT
-import re
  
 # AWS credentials configuration
 # Option 1: Environment variables
@@ -17,9 +16,9 @@ import re
 # os.environ["AWS_REGION"] = "us-east-1"
  
 # Option 2: Direct configuration
-AWS_ACCESS_KEY_ID = "AKIAQLVQQ74WK3JG42WG"  
-AWS_SECRET_ACCESS_KEY = "CqyEZU4Rx65hsHavfLytmg5PwFQJaWmzNzGp2EgJ"  
-AWS_REGION = "us-east-1"  
+AWS_ACCESS_KEY_ID = "AKIAQLVQQ74WK3JG42WG"  # Replace with your access key
+AWS_SECRET_ACCESS_KEY = "CqyEZU4Rx65hsHavfLytmg5PwFQJaWmzNzGp2EgJ"  # Replace with your secret key
+AWS_REGION = "us-east-1"  # Change to your preferred region
  
 # Bedrock model configuration
 MODEL_ID = "us.anthropic.claude-3-5-sonnet-20240620-v1:0"
@@ -44,7 +43,7 @@ def initialize_bedrock_client():
         config=config
     )
 
-def prepare_bedrock_request(user_message, country):
+def prepare_bedrock_request(user_message):
     """
     Prepare request for Claude 3.5 via Bedrock Messages API
     using the correct allowed roles (user, assistant).
@@ -52,22 +51,22 @@ def prepare_bedrock_request(user_message, country):
     """
     messages = []
 
-    # Format prompt with country context
-    country_note = f"\n\nUser's Selected Country is: {country}."
-    modified_prompt = FINANCIAL_ADVISOR_PROMPT + country_note
-
+    # Inject system prompt as first user message
     messages.append({
         "role": "user",
-        "content": [{"type": "text", "text": modified_prompt}]
+        "content": [{"type": "text", "text": FINANCIAL_ADVISOR_PROMPT}]
     })
 
+    # Add chat history
     for msg in conversation_history:
-        if msg["role"] in ["user", "assistant"]:
-            messages.append({
-                "role": msg["role"],
-                "content": [{"type": "text", "text": msg["content"]}]
-            })
+        if msg["role"] not in ["user", "assistant"]:
+            continue  # Skip unsupported roles
+        messages.append({
+            "role": msg["role"],
+            "content": [{"type": "text", "text": msg["content"]}]
+        })
 
+    # Add new user message
     messages.append({
         "role": "user",
         "content": [{"type": "text", "text": user_message}]
@@ -81,12 +80,13 @@ def prepare_bedrock_request(user_message, country):
         "messages": messages
     }
 
+
  
-def invoke_claude(bedrock_client, user_message, country):
+def invoke_claude(bedrock_client, user_message):
     """
     Send a request to Claude via AWS Bedrock and return the response
     """
-    request_body = prepare_bedrock_request(user_message, country)
+    request_body = prepare_bedrock_request(user_message)
     
     try:
         response = bedrock_client.invoke_model(
@@ -104,51 +104,54 @@ def invoke_claude(bedrock_client, user_message, country):
 def parse_response(response_body):
     """
     Parse Claude Messages API response and extract the JSON response from the LLM.
-    If the LLM's JSON is malformed, attempt to extract the {...} substring and clean
-    trailing commas before loading.
+    Handles nested JSON strings properly.
     """
-    # Grab the content blocks
     content_blocks = response_body.get("content", [])
-    if not content_blocks:
-        return {"response": "No response received.", "confidence": 0}
 
-    # Join all text pieces
+    if not content_blocks:
+        return {
+            "response": "No response received.",
+            "confidence": 0
+        }
+
+    # Join and strip the response text
     response_text = "\n".join(
-        block.get("text", "") 
-        for block in content_blocks 
-        if block.get("type") == "text"
+        block.get("text", "") for block in content_blocks if block.get("type") == "text"
     ).strip()
 
-    # Try a straight JSON load first
+    # Attempt first level of JSON parsing
     try:
-        parsed = json.loads(response_text)
-    except json.JSONDecodeError:
-        # If that fails, try to extract the {...} and clean it up
-        start = response_text.find("{")
-        end   = response_text.rfind("}")
-        if start != -1 and end != -1 and end > start:
-            candidate = response_text[start:end+1]
-            # remove any trailing commas before } or ]
-            candidate = re.sub(r",\s*}", "}", candidate)
-            candidate = re.sub(r",\s*]", "]", candidate)
+        first_pass = json.loads(response_text)
+        
+        # If it's a string again, parse it one more time
+        if isinstance(first_pass, str):
             try:
-                parsed = json.loads(candidate)
+                second_pass = json.loads(first_pass)
+                if isinstance(second_pass, dict) and "response" in second_pass:
+                    return {
+                        "response": second_pass["response"],
+                        "confidence": second_pass.get("confidence", 50)
+                    }
             except json.JSONDecodeError:
-                # give up, fall back
-                parsed = {"response": response_text, "confidence": 50}
-        else:
-            parsed = {"response": response_text, "confidence": 50}
+                pass  # Fall through to outer return
 
-    # If parsed is a dict and has a "response", ensure "confidence" too
-    if isinstance(parsed, dict) and "response" in parsed:
-        if "confidence" not in parsed or not isinstance(parsed["confidence"], (int, float)):
-            parsed["confidence"] = 50
-        return parsed
+        # If the first pass is already a dict
+        if isinstance(first_pass, dict) and "response" in first_pass:
+            return {
+                "response": first_pass["response"],
+                "confidence": first_pass.get("confidence", 50)
+            }
 
-    # Otherwise wrap whatever we got
-    return {"response": response_text, "confidence": 50}
+    except json.JSONDecodeError:
+        pass
+
+    # Fallback: treat raw text as plain response
+    return {
+        "response": response_text,
+        "confidence": 50
+    }
  
-def get_financial_advice(user_message, country):
+def get_financial_advice(user_message):
     """
     Process a user message and get a response from the financial advisor
     """
@@ -156,7 +159,7 @@ def get_financial_advice(user_message, country):
     bedrock_client = initialize_bedrock_client()
     
     # Get response from Claude
-    raw_response = invoke_claude(bedrock_client, user_message, country)
+    raw_response = invoke_claude(bedrock_client, user_message)
     print("\n--- Raw LLM Response ---")
     print(json.dumps(raw_response, indent=2))
     parsed_response = parse_response(raw_response)
