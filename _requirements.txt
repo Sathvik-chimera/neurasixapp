@@ -2,4 +2,4 @@
 boto3
 streamlit
 openai
-dotenv
+python-dotenv
