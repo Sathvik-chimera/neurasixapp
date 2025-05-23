@@ -17,9 +17,11 @@ import re
 # os.environ["AWS_REGION"] = "us-east-1"
  
 # Option 2: Direct configuration
-AWS_ACCESS_KEY_ID = "AKIAQLVQQ74WK3JG42WG"  
-AWS_SECRET_ACCESS_KEY = "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"  
-AWS_REGION = "us-east-1"  
+ 
+
+AWS_ACCESS_KEY_ID = os.environ["AWS_ACCESS_KEY_ID"] 
+AWS_SECRET_ACCESS_KEY = os.environ["AWS_SECRET_ACCESS_KEY"]  
+AWS_REGION = os.environ["AWS_REGION"] 
  
 # Bedrock model configuration
 MODEL_ID = "us.anthropic.claude-3-5-sonnet-20240620-v1:0"

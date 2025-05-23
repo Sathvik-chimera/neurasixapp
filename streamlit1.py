@@ -1,5 +1,5 @@
 import streamlit as st
-from agent import get_financial_advice, reset_conversation
+from neurasixapp.agent import get_financial_advice, reset_conversation
 
 COUNTRIES = ["United States", "India", "Bahrain", "Qatar", "UAE", "Saudi Arabia", "Kuwait", "Oman"]
 
