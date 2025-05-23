@@ -9,8 +9,8 @@ from botocore.config import Config
 import os
 from prompt import FINANCIAL_ADVISOR_PROMPT
 import re
-from dotenv import load_dotenv
-load_dotenv()
+# from dotenv import load_dotenv
+# load_dotenv()
  
 # AWS credentials configuration
 # Option 1: Environment variables
