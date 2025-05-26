@@ -9,6 +9,9 @@ from botocore.config import Config
 import os
 from prompt import FINANCIAL_ADVISOR_PROMPT
 import re
+import logging
+
+logger = logging.getLogger(__name__)
 # from dotenv import load_dotenv
 # load_dotenv()
  
@@ -109,7 +112,7 @@ def parse_response(response_body):
     """
     Parse Claude Messages API response and extract the JSON response from the LLM.
     If the LLM's JSON is malformed, attempt to extract the {...} substring and clean
-    trailing commas before loading.
+    trailing commas before loading. Returns structured response with response and confidence.
     """
     # Grab the content blocks
     content_blocks = response_body.get("content", [])
@@ -123,34 +126,70 @@ def parse_response(response_body):
         if block.get("type") == "text"
     ).strip()
 
-    # Try a straight JSON load first
+    # Try to parse JSON response
+    parsed_result = None
     try:
-        parsed = json.loads(response_text)
+        parsed_result = json.loads(response_text)
     except json.JSONDecodeError:
         # If that fails, try to extract the {...} and clean it up
         start = response_text.find("{")
-        end   = response_text.rfind("}")
+        end = response_text.rfind("}")
         if start != -1 and end != -1 and end > start:
             candidate = response_text[start:end+1]
-            # remove any trailing commas before } or ]
+            # Remove any trailing commas before } or ]
             candidate = re.sub(r",\s*}", "}", candidate)
             candidate = re.sub(r",\s*]", "]", candidate)
             try:
-                parsed = json.loads(candidate)
+                parsed_result = json.loads(candidate)
             except json.JSONDecodeError:
-                # give up, fall back
-                parsed = {"response": response_text, "confidence": 50}
+                logger.warning(f"Failed to parse JSON from response: {response_text}")
+                parsed_result = None
         else:
-            parsed = {"response": response_text, "confidence": 50}
+            logger.warning(f"No valid JSON structure found in response: {response_text}")
+            parsed_result = None
 
-    # If parsed is a dict and has a "response", ensure "confidence" too
-    if isinstance(parsed, dict) and "response" in parsed:
-        if "confidence" not in parsed or not isinstance(parsed["confidence"], (int, float)):
-            parsed["confidence"] = 50
-        return parsed
+    # Process the parsed result
+    if parsed_result is None:
+        # Fallback when JSON parsing completely fails
+        return {"response": response_text, "confidence": 50}
 
-    # Otherwise wrap whatever we got
-    return {"response": response_text, "confidence": 50}
+    # Handle the expected format with 'response' and 'confidence'
+    if isinstance(parsed_result, dict):
+        # Check if it has the expected 'response' field
+        if 'response' in parsed_result:
+            response_value = parsed_result['response']
+            confidence_value = parsed_result.get('confidence', 50)
+            
+            # Ensure confidence is a valid number
+            if not isinstance(confidence_value, (int, float)):
+                try:
+                    confidence_value = float(confidence_value)
+                except (ValueError, TypeError):
+                    confidence_value = 50
+                    logger.warning(f"Invalid confidence value, defaulting to 50: {parsed_result.get('confidence')}")
+            
+            return {
+                'response': response_value,
+                'confidence': float(confidence_value)
+            }
+        
+        # Handle alternative formats - check if it's a different structure
+        elif any(key.startswith('type') for key in parsed_result.keys()):
+            # This might be a different format, log and provide fallback
+            logger.info(f"Received alternative JSON format: {parsed_result}")
+            return {"response": str(parsed_result), "confidence": 50}
+        
+        # Handle case where parsed_result is a dict but doesn't have 'response'
+        else:
+            logger.warning(f"Unexpected JSON format without 'response' field: {parsed_result}")
+            # Try to extract meaningful content from the dict
+            response_content = str(parsed_result)
+            return {"response": response_content, "confidence": 50}
+    
+    # Handle case where parsed_result is not a dict (e.g., list, string, etc.)
+    else:
+        logger.warning(f"Unexpected JSON structure (not a dict): {parsed_result}")
+        return {"response": str(parsed_result), "confidence": 50}
  
 def get_financial_advice(user_message, country):
     """
